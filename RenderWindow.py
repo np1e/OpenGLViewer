@@ -32,6 +32,7 @@ from OpenGL.arrays import vbo
 from OpenGL.GLU import *
 from OpenGL.GLUT import *
 
+from enum import Enum
 
 import numpy as np
 from numpy import array
@@ -56,17 +57,42 @@ class Scene:
         self.pointsize = 3
         self.width = width
         self.height = height
+
+
+        self.bgColor = [1., 1., 1., 1.]
+
+        # arcball
         self.angle = 0
         self.axis = array([0,1,0])
         self.actOri = np.identity(4)
         self.doRotation = False
-        self.doZoom = False
-        self.doTranslate = False
-        self.scale = 1
+
+        #  zoom
         self.actSize = np.identity(4)
+        self.doZoom = False
+        self.scale = 1
+
+        # move
+        self.doTranslate = False
         self.offset = (0, 0)
         self.actPos = np.identity(4)
-        self.color = [0.4, 0.4, 0.4]
+
+        # light
+        self.xLight = 200.0
+        self.yLight = 500.0
+        self.zLight = 200.0
+        self.light = [self.xLight, self.yLight, self.zLight]
+
+        # shadow
+        self.shadowc = [0.6, 0.6, 0.6]
+        self.doShadow = False
+        self.shadow_p = [1.0, 0, 0, 0,
+                         0, 1.0, 0, -1.0 / self.yLight,
+                         0, 0, 1.0, 0,
+                         0, 0, 0, 0]
+        self.neg_y = min([b[1] for b in self.bbox])
+
+        self.color = [0.1, 0.5, 0.8, 1.0]
         glPointSize(self.pointsize)
         glLineWidth(self.pointsize)
 
@@ -81,9 +107,10 @@ class Scene:
 
 
     def rotate(self, angle, axis):
+        angle *= 2
         c, mc = np.cos(angle), 1 - np.cos(angle)
         s = np.sin(angle)
-        l = np.sqrt(np.dot(array(axis), array(axis)))
+        l = np.sqrt(np.dot(axis, axis))
         x, y, z = array(axis) / l
         r = np.matrix(
             [[x*x*mc+c, x*y*mc-z*s, x*z*mc+y*s, 0],
@@ -110,10 +137,13 @@ class Scene:
 
     # render 
     def render(self):
-        #glColor(1.0, 1.0, 1.0)
-        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, GLfloat_3(*self.color))
-        #glMaterialfv(GL_FRONT, GL_SHININESS, 40)
-        #glMaterialfv(GL_FRONT, GL_SPECULAR, GLfloat_4(1., 1., 1., 0.1))
+
+        glClearColor(*self.bgColor)
+        mat_specular = [0.8, 0.8, 0.8, 0.5]
+        mat_shininess = [8.0]
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, self.color)
+        glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular)
+        glMaterialfv(GL_FRONT, GL_SHININESS, mat_shininess)
 
         #self.vbo.bind()
         self.uni_vbo.bind()
@@ -121,15 +151,40 @@ class Scene:
         glEnableClientState(GL_NORMAL_ARRAY)
         glEnableClientState(GL_VERTEX_ARRAY)
 
-        #glNormalPointerf(self.vbon)
-        #glVertexPointerf(self.vbo)
-
         glVertexPointer(3, GL_FLOAT, 24, self.uni_vbo)
+
+        if self.doShadow:
+            glMatrixMode(GL_MODELVIEW)
+            glPushMatrix()
+
+            glTranslatef(0, self.neg_y, 0)
+
+            glTranslatef(self.xLight, self.yLight, self.zLight)
+            glMultMatrixf(self.shadow_p)
+            glTranslatef(-self.xLight, -self.yLight, -self.zLight)
+            glTranslatef(0, -self.neg_y, 0)
+            glColor3f(self.shadowc[0], self.shadowc[1], self.shadowc[2])
+            glDisable(GL_DEPTH_TEST)
+            glDisable(GL_LIGHTING)
+            glDrawArrays(GL_TRIANGLES, 0, len(self.vbo))
+            glPopMatrix()
+            glEnable(GL_LIGHTING)
+            glEnable(GL_DEPTH_TEST)
+
         glNormalPointer(GL_FLOAT, 24, self.uni_vbo+12)
 
-        glMultMatrixf(self.actSize * self.zoom(self.scale))
-        glMultMatrixf(self.actOri * self.rotate(self.angle, self.axis))
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+
+        # moving
         glMultMatrixf(self.actPos * self.translate(*self.offset))
+
+        # scaling
+        glMultMatrixf(self.actSize * self.zoom(self.scale))
+
+        # rotation
+        glMultMatrixf(self.actOri * self.rotate(self.angle, self.axis))
+
 
         glDrawArrays(GL_TRIANGLES, 0, len(self.points))
         self.uni_vbo.unbind()
@@ -139,6 +194,9 @@ class Scene:
         glDisableClientState(GL_NORMAL_ARRAY)
 
 
+class ColorMode(Enum):
+    background = 1
+    object = 0
 
 class RenderWindow:
     """GLFW Rendering window class"""
@@ -177,40 +235,44 @@ class RenderWindow:
 
         # Make the window's context current
         glfw.make_context_current(self.window)
-    
+
+        glMatrixMode(GL_PROJECTION)
+
         # initialize GL
         glViewport(0, 0, self.width, self.height)
+
+        self.setCamera()
 
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_NORMALIZE)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
+        glEnable(GL_FOG)
 
+        glLightfv(GL_LIGHT0, GL_POSITION, [0., 0., 10., 0.])
         glLightfv(GL_LIGHT1, GL_AMBIENT, GLfloat_4(.1, .1, .1, 1.))
         glLightfv(GL_LIGHT1, GL_SPECULAR, GLfloat_4(1., 1.1, 1., 1.))
         glLightfv(GL_LIGHT1, GL_DIFFUSE, GLfloat_3(1., 1.0, 1.0))
         glLightfv(GL_LIGHT1, GL_POSITION, GLfloat_4(8, 1, 8, 0))
-        glClearColor(.7, .7, .7, 1.)
 
         boundingBox = [list(map(min, zip(*vertices))), list(map(max, zip(*vertices)))]
-        self.center = [(x[0] + x[1]) / 2 for x in zip(*boundingBox)]
-        self.scale = 1. / max([x[1] - x[0] for x in zip(*boundingBox)])
 
-        self.setCamera()
-        glLoadIdentity()
-        glScale(self.scale, self.scale, self.scale)
-        glTranslate(-self.center[0], -self.center[1], -self.center[2])
+        # create 3D
+        self.scene = Scene(self.width, self.height, vertices, normals, boundingBox, data)
+
+        self.scene.center = [(x[0] + x[1]) / 2 for x in zip(*boundingBox)]
+        self.scene.scale = 1. / max([x[1] - x[0] for x in zip(*boundingBox)])
+
+        # move object to origin
+        glScale(self.scene.scale, self.scene.scale, self.scene.scale)
+        glTranslate(-self.scene.center[0], -self.scene.center[1], -self.scene.center[2])
 
         # set window callbacks
         glfw.set_mouse_button_callback(self.window, self.onMouseButton)
         glfw.set_key_callback(self.window, self.onKeyboard)
         glfw.set_cursor_pos_callback(self.window, self.mouseMoved)
-        glfw.set_scroll_callback(self.window, self.scrolled)
+        #glfw.set_scroll_callback(self.window, self.scrolled)
         glfw.set_window_size_callback(self.window, self.onSize)
-
-
-        # create 3D
-        self.scene = Scene(self.width, self.height, vertices, normals, boundingBox, data)
         
         # exit flag
         self.exitNow = False
@@ -218,12 +280,19 @@ class RenderWindow:
         # animation flag
         self.animation = True
 
+        self.colorMode = ColorMode.background
+
         self.prevX = -1
         self.prevY = -1
-        self.bgColor = [1., 1., 1., 1.]
+
+        glMatrixMode(GL_MODELVIEW)
 
     def setCamera(self):
+
         glMatrixMode(GL_PROJECTION)
+
+        # initialize GL
+        glViewport(0, 0, self.width, self.height)
 
         glLoadIdentity()
 
@@ -235,13 +304,13 @@ class RenderWindow:
         if self.ortho:
             glOrtho(-1.5 * aspect, 1.5 * aspect,
                     -1.5, 1.5,
-                    0.1, 100)
+                    -100, 100)
         else:
             gluPerspective(45., aspect, 0.1, 100.)
-
-        glTranslatef(0, 0, -2)
+            glTranslatef(0., 0., -2.)
 
         glMatrixMode(GL_MODELVIEW)
+
 
     def mapToRange(self, x, fromRange, toRange):
 
@@ -251,28 +320,23 @@ class RenderWindow:
 
     def mouseMoved(self, win, x, y):
 
-        if self.prevX == x and self.prevY == y:
-            self.scene.doRotation = False
-            self.scene.doTranslate = False
-            self.scene.doZoom = False
-        else:
-            if self.scene.doRotation:
-                r = min(self.width, self.height) / 2.0
-                self.moveP = self.projectOnSphere(x, y, r)
-                self.scene.angle = np.arccos(np.dot(self.startP, self.moveP))
-                self.scene.axis = np.cross(self.startP, self.moveP)
+        if self.scene.doRotation:
+            r = min(self.width, self.height) / 2.0
+            self.moveP = self.projectOnSphere(x, y, r)
+            self.scene.angle = np.arccos(min(1.0, np.dot(self.startP, self.moveP)))
+            self.scene.axis = np.cross(self.startP, self.moveP)
 
-            if self.scene.doZoom:
-                self.moveZoom = x, y
-                deltaMax, deltaMin = self.height, 0.
-                delta = self.moveZoom[1] - self.startZoom[1]
-                self.scene.scale = self.mapToRange(delta, (deltaMin, deltaMax), (1., 4.))
+        if self.scene.doZoom:
+            self.moveZoom = x, y
+            deltaMax, deltaMin = self.height, 0.
+            delta = self.moveZoom[1] - self.startZoom[1]
+            self.scene.scale = self.mapToRange(delta, (deltaMin, deltaMax), (1., 4.))
 
-            if self.scene.doTranslate:
-                moveX, moveY = self.startPoint[0] - x, self.startPoint[1] - y
-                x = self.mapToRange(moveX, (0, self.width), (0., 1))
-                y = self.mapToRange(moveY, (0, self.height), (0., 1))
-                self.scene.offset = -x, y
+        if self.scene.doTranslate:
+            moveX, moveY = self.startPoint[0] - x, self.startPoint[1] - y
+            x = self.mapToRange(moveX, (0, self.width), (0., 1.5))
+            y = self.mapToRange(moveY, (0, self.height), (0., 1.5))
+            self.scene.offset = -x, y
 
         self.prevX, self.prevY = x, y
 
@@ -284,25 +348,25 @@ class RenderWindow:
             self.scene.scale = 1
 
     def projectOnSphere(self, x, y, r):
-        x, y = x - self.width/2.0, self.height/2.0 - y
-        a = min(r*r, x**2 + y**2)
-        z = np.sqrt(r*r - a)
-        l = np.sqrt(x**2 + y**2 + z**2)
-        return x/l, y/l, z/l
+        x, y = x - self.width / 2.0, self.height / 2.0 - y
+        a = min(r * r, x ** 2 + y ** 2)
+        z = np.sqrt(r * r - a)
+        l = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+        return x / l, y / l, z / l
 
     def onMouseButton(self, win, button, action, mods):
         print("mouse button: ", win, button, action, mods)
 
         # rotate on left mouse button
-        r = min(self.width, self.height) / 2.0
         if button == glfw.MOUSE_BUTTON_LEFT:
+            r = min(self.width, self.height) / 2.0
             if action == glfw.PRESS:
                 self.scene.doRotation = True
                 x, y = glfw.get_cursor_pos(win)
                 self.startP = self.projectOnSphere(x, y, r)
             if action == glfw.RELEASE:
                 self.scene.doRotation = False
-                self.scene.actOri = 1#self.scene.actOri*self.scene.rotate(self.scene.angle, self.scene.axis)
+                self.scene.actOri = self.scene.actOri*self.scene.rotate(self.scene.angle, self.scene.axis)
                 self.scene.angle = 0
 
         # scale on middle mouse button
@@ -313,7 +377,7 @@ class RenderWindow:
                 self.startZoom = glfw.get_cursor_pos(win)
             if action == glfw.RELEASE:
                 self.scene.doZoom = False
-                self.scene.actSize = 1#self.scene.actSize * self.scene.zoom(self.scene.scale)
+                self.scene.actSize = self.scene.actSize * self.scene.zoom(self.scene.scale)
                 self.scene.scale = 1
 
         # translate on right mouse button
@@ -323,7 +387,7 @@ class RenderWindow:
                 self.startPoint = glfw.get_cursor_pos(win)
             if action == glfw.RELEASE:
                 self.scene.doTranslate = False
-                self.scene.actPos = np.identity(4)
+                self.scene.actPos = self.scene.actPos * self.scene.translate(*self.scene.offset)
                 self.scene.offset = (0, 0)
 
     def onKeyboard(self, win, key, scancode, action, mods):
@@ -343,23 +407,58 @@ class RenderWindow:
                 self.ortho = False
                 self.setCamera()
                 self.run()
-            if key == glfw.KEY_R:
-                self.scene.color = [1., 0., 0.]
-            if key == glfw.KEY_G:
-                self.scene.color = [0., 1., 0.]
-            if key == glfw.KEY_B:
-                self.scene.color = [0., 0., 1.]
-            if key == glfw.KEY_W:
-                self.bgColor = [1., 1., 1., 1.]
-            if key == glfw.KEY_S:
-                self.bgColor = [0., 0., 0., 1.]
+            if key == glfw.KEY_C:
+                if self.colorMode == ColorMode.background:
+                    self.colorMode = ColorMode.object
+                else:
+                    self.colorMode = ColorMode.background
 
+            if self.colorMode == ColorMode.background:
+                if key == glfw.KEY_R:
+                    self.scene.bgColor = [0.8, 0.1, 0.1, 1.0]
+                if key == glfw.KEY_G:
+                    self.scene.bgColor = [0.1, 0.8, 0.5, 1.0]
+                if key == glfw.KEY_B:
+                    self.scene.bgColor = [0.1, 0.5, 0.8, 1.0]
+                if key == glfw.KEY_W:
+                    self.scene.bgColor = [1., 1., 1., 1.]
+                if key == glfw.KEY_S:
+                    self.scene.bgColor = [0., 0., 0., 1.]
+            else:
+                if key == glfw.KEY_R:
+                    self.scene.color = [0.8, 0.1, 0.1, 1.0]
+                if key == glfw.KEY_G:
+                    self.scene.color = [0.1, 0.8, 0.5, 1.0]
+                if key == glfw.KEY_B:
+                    self.scene.color = [0.1, 0.5, 0.8, 1.0]
+                if key == glfw.KEY_W:
+                    self.scene.color = [1., 1., 1., 1.]
+                if key == glfw.KEY_S:
+                    self.scene.color = [0., 0., 0., 1.]
+            angle = np.radians(360/16)
             if key == glfw.KEY_X:
-                self.scene.rotate(10, [1,0,0])
+                if action == glfw.PRESS:
+                    self.scene.angle = angle
+                    self.scene.axis = [1,0,0]
+                    self.scene.actOri = self.scene.actOri * self.scene.rotate(angle, [1,0,0])
+                if action == glfw.RELEASE:
+                    self.scene.angle = 0
             if key == glfw.KEY_Y:
-                self.scene.rotate(10, [0,1,0])
+                if action == glfw.PRESS:
+                    self.scene.angle = angle
+                    self.scene.axis = [0, 1, 0]
+                    self.scene.actOri = self.scene.actOri * self.scene.rotate(angle, [0, 1, 0])
+                if action == glfw.RELEASE:
+                    self.scene.angle = 0
             if key == glfw.KEY_Z:
-                self.scene.rotate(10, [0,0,1])
+                self.scene.angle = angle
+                self.scene.axis = [0, 0, 1]
+                self.scene.actOri = self.scene.actOri * self.scene.rotate(angle, [0, 0, 1])
+                if action == glfw.RELEASE:
+                    self.scene.actOri = self.scene.actOri * self.scene.rotate(angle, [0, 0, 1])
+                    self.scene.angle = 0
+            if key == glfw.KEY_H:
+                self.scene.doShadow = not self.scene.doShadow
 
 
     def onSize(self, win, width, height):
@@ -383,8 +482,6 @@ class RenderWindow:
 
                 # clear
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-                glClearColor(*self.bgColor)
 
                 self.scene.render()
 
@@ -458,19 +555,19 @@ def read_file(filename):
 
                     # if there already is a normal for a vertex, just add n to the existing normal
                     if vertex_normals.get(x[0], np.array(0)).any():
-                        vertex_normals[x[0]] += n
+                        vertex_normals[x[0]] += normalize(n)
                     else:
-                        vertex_normals[x[0]] = n
+                        vertex_normals[x[0]] = normalize(n)
 
                     if vertex_normals.get(y[0], np.array(0)).any():
-                        vertex_normals[y[0]] += n
+                        vertex_normals[y[0]] += normalize(n)
                     else:
-                        vertex_normals[y[0]] = n
+                        vertex_normals[y[0]] = normalize(n)
 
                     if vertex_normals.get(z[0], np.array(0)).any():
-                        vertex_normals[z[0]] += n
+                        vertex_normals[z[0]] += normalize(n)
                     else:
-                        vertex_normals[z[0]] = n
+                        vertex_normals[z[0]] = normalize(n)
 
                 faces.append([x, y, z])
                 continue
