@@ -42,7 +42,7 @@ from functools import reduce
 class Scene:
     """ OpenGL 2D scene class """
     # initialization
-    def __init__(self, width, height, points, normals, bbox, data):
+    def __init__(self, width, height, points, normals, data, bbox):
         # time
         self.points = points
         self.normals = normals
@@ -57,7 +57,6 @@ class Scene:
         self.pointsize = 3
         self.width = width
         self.height = height
-
 
         self.bgColor = [1., 1., 1., 1.]
 
@@ -78,13 +77,13 @@ class Scene:
         self.actPos = np.identity(4)
 
         # light
-        self.xLight = 200.0
-        self.yLight = 500.0
-        self.zLight = 200.0
+        self.xLight = 2400.0
+        self.yLight = 3000.0
+        self.zLight = 2400.0
         self.light = [self.xLight, self.yLight, self.zLight]
 
         # shadow
-        self.shadowc = [0.6, 0.6, 0.6]
+        self.shadowc = [0.3, 0.3, 0.3]
         self.doShadow = False
         self.shadow_p = [1.0, 0, 0, 0,
                          0, 1.0, 0, -1.0 / self.yLight,
@@ -156,7 +155,7 @@ class Scene:
         if self.doShadow:
             glMatrixMode(GL_MODELVIEW)
             glPushMatrix()
-
+            #glLoadIdentity()
             glTranslatef(0, self.neg_y, 0)
 
             glTranslatef(self.xLight, self.yLight, self.zLight)
@@ -185,6 +184,8 @@ class Scene:
         # rotation
         glMultMatrixf(self.actOri * self.rotate(self.angle, self.axis))
 
+        #glScale(self.scale, self.scale, self.scale)
+        glTranslate(-self.center[0], -self.center[1], -self.center[2])
 
         glDrawArrays(GL_TRIANGLES, 0, len(self.points))
         self.uni_vbo.unbind()
@@ -201,6 +202,11 @@ class ColorMode(Enum):
 class RenderWindow:
     """GLFW Rendering window class"""
     def __init__(self, vertices, normals, data):
+
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
         
         # save current working directory
         cwd = os.getcwd()
@@ -238,9 +244,6 @@ class RenderWindow:
 
         glMatrixMode(GL_PROJECTION)
 
-        # initialize GL
-        glViewport(0, 0, self.width, self.height)
-
         self.setCamera()
 
         glEnable(GL_DEPTH_TEST)
@@ -258,14 +261,16 @@ class RenderWindow:
         boundingBox = [list(map(min, zip(*vertices))), list(map(max, zip(*vertices)))]
 
         # create 3D
-        self.scene = Scene(self.width, self.height, vertices, normals, boundingBox, data)
+        self.scene = Scene(self.width, self.height, vertices, normals, data, boundingBox)
 
         self.scene.center = [(x[0] + x[1]) / 2 for x in zip(*boundingBox)]
-        self.scene.scale = 1. / max([x[1] - x[0] for x in zip(*boundingBox)])
+        self.scene.scale = 2. / max([x[1] - x[0] for x in zip(*boundingBox)])
 
         # move object to origin
-        glScale(self.scene.scale, self.scene.scale, self.scene.scale)
-        glTranslate(-self.scene.center[0], -self.scene.center[1], -self.scene.center[2])
+        #glMatrixMode(GL_MODELVIEW)
+        #glLoadIdentity()
+        #glScale(self.scene.scale, self.scene.scale, self.scene.scale)
+        #glTranslate(-self.scene.center[0], -self.scene.center[1] - boundingBox[1][1], -self.scene.center[2])
 
         # set window callbacks
         glfw.set_mouse_button_callback(self.window, self.onMouseButton)
@@ -296,18 +301,24 @@ class RenderWindow:
 
         glLoadIdentity()
 
-        if self.width <= self.height:
-            aspect = self.height/self.width
-        else:
-            aspect = self.width/self.height
+        aspect = float(self.width) / self.height
 
-        if self.ortho:
-            glOrtho(-1.5 * aspect, 1.5 * aspect,
-                    -1.5, 1.5,
-                    -100, 100)
+        if aspect >= 1.0:
+            if self.ortho:
+                glOrtho(-1.5 * aspect, 1.5 * aspect,
+                        -1.5, 1.5,
+                        -100, 100)
+            else:
+                gluPerspective(45., aspect, 0.1, 100.)
+                glTranslatef(0., 0., -4.)
         else:
-            gluPerspective(45., aspect, 0.1, 100.)
-            glTranslatef(0., 0., -2.)
+            if self.ortho:
+                glOrtho(-1.5, 1.5,
+                        -1.5 / aspect, 1.5 / aspect,
+                        -100, 100)
+            else:
+                gluPerspective(45. * float(self.height) / self.width, aspect, 0.1, 100.)
+                glTranslatef(0., 0., -4.)
 
         glMatrixMode(GL_MODELVIEW)
 
@@ -327,10 +338,19 @@ class RenderWindow:
             self.scene.axis = np.cross(self.startP, self.moveP)
 
         if self.scene.doZoom:
-            self.moveZoom = x, y
-            deltaMax, deltaMin = self.height, 0.
-            delta = self.moveZoom[1] - self.startZoom[1]
-            self.scene.scale = self.mapToRange(delta, (deltaMin, deltaMax), (1., 4.))
+
+            delta = y - self.startZoom[1]
+
+            if self.prevY > y and self.scene.scale > 0:
+                self.scene.scale += abs(float(float(delta / self.scene.height*2)))
+            if self.prevY <= y and self.scene.scale > 0:
+                self.scene.scale -= abs(float(float(delta / self.scene.height*2)))
+
+            if self.scene.scale <= 0.00015:
+                self.scene.scale = 0.0002
+            print(self.scene.scale)
+            self.prevY = y
+            #self.scene.scale = self.mapToRange(delta, (deltaMin, deltaMax), (0., 2.))
 
         if self.scene.doTranslate:
             moveX, moveY = self.startPoint[0] - x, self.startPoint[1] - y
@@ -343,7 +363,7 @@ class RenderWindow:
     def scrolled(self, win, xoffset, yoffset):
         print(yoffset)
         deltaMax, deltaMin = self.height, 0.
-        self.scene.scale = self.mapToRange(yoffset, (deltaMin, deltaMax), (1., 4.))
+        self.scene.scaleFactor = self.mapToRange(yoffset, (deltaMin, deltaMax), (1., 4.))
         if yoffset == 0:
             self.scene.scale = 1
 
@@ -375,6 +395,7 @@ class RenderWindow:
             if action == glfw.PRESS:
                 self.scene.doZoom = True
                 self.startZoom = glfw.get_cursor_pos(win)
+                self.prevY = self.startZoom[1]
             if action == glfw.RELEASE:
                 self.scene.doZoom = False
                 self.scene.actSize = self.scene.actSize * self.scene.zoom(self.scene.scale)
@@ -463,8 +484,10 @@ class RenderWindow:
 
     def onSize(self, win, width, height):
         print("onsize: ", win, width, height)
-        self.width = width
-        self.height = height
+        if height == 0:
+            height = 1
+        self.width = self.scene.width = width
+        self.height = self.scene.height = height
         self.aspect = width/float(height)
         glViewport(0, 0, self.width, self.height)
         self.setCamera()
