@@ -1,4 +1,4 @@
 glfw==1.8.1
-numpy==1.16.4
+numpy==1.22.0
 pkg-resources==0.0.0
 PyOpenGL==3.1.0
